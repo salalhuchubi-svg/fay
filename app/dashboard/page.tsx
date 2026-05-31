@@ -1,5 +1,5 @@
 "use client";
-import { useState, useEffect, useCallback } from "react";
+import { useState, useEffect, useCallback, useRef } from "react";
 import { motion, AnimatePresence } from "framer-motion";
 import NavBar from "../components/NavBar";
 import StatCard from "../components/StatCard";
@@ -187,8 +187,51 @@ function TikTokTab({
   );
   const [addVideoOpen, setAddVideoOpen] = useState(false);
   const [generatingIdeas, setGeneratingIdeas] = useState(false);
+  const [syncing, setSyncing] = useState(false);
+  const [syncMsg, setSyncMsg] = useState("");
+  const hasSyncedRef = useRef(false);
 
   const account = data.tiktokAccounts.find((a) => a.id === selected);
+
+
+  async function syncAccount() {
+    if (!account) return;
+    setSyncing(true);
+    setSyncMsg("Syncing...");
+    try {
+      const res = await fetch("/api/tiktok-sync", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ username: account.username }),
+      });
+      const result = await res.json();
+      if (result.error) {
+        setSyncMsg("Sync failed: " + result.error);
+        return;
+      }
+      const updated = data.tiktokAccounts.map((a) =>
+        a.id === account.id
+          ? {
+              ...a,
+              followers: result.followers,
+              followerHistory: [
+                ...(a.followerHistory || []),
+                { date: new Date().toISOString().split("T")[0], count: result.followers },
+              ],
+              videos: result.videos?.length ? result.videos : a.videos,
+              lastUpdated: new Date().toISOString(),
+            }
+          : a
+      );
+      update({ ...data, tiktokAccounts: updated });
+      setSyncMsg(`✓ Synced! ${result.followers.toLocaleString()} followers · ${result.videos?.length || 0} videos`);
+    } catch {
+      setSyncMsg("Sync failed. Check your connection.");
+    } finally {
+      setSyncing(false);
+      setTimeout(() => setSyncMsg(""), 4000);
+    }
+  }
 
   async function generateIdeas() {
     if (!account) return;
@@ -233,13 +276,34 @@ function TikTokTab({
         <h2 className="text-lg font-semibold" style={{ color: "#f0f0ff" }}>
           TikTok Accounts
         </h2>
-        <button
-          onClick={() => onModal("add-tiktok")}
-          className="px-4 py-2 rounded-xl text-sm font-medium text-white"
-          style={{ background: "linear-gradient(135deg, #9d4edd, #e040fb)" }}
-        >
-          + Add Account
-        </button>
+        <div className="flex gap-2 items-center">
+          {syncMsg && (
+            <span className="text-xs" style={{ color: syncMsg.startsWith("✓") ? "#69ff47" : "#ff4747" }}>
+              {syncMsg}
+            </span>
+          )}
+          {account && (
+            <button
+              onClick={syncAccount}
+              disabled={syncing}
+              className="px-4 py-2 rounded-xl text-sm font-medium disabled:opacity-50"
+              style={{
+                background: "rgba(0,229,255,0.15)",
+                border: "1px solid rgba(0,229,255,0.3)",
+                color: "#00e5ff",
+              }}
+            >
+              {syncing ? "Syncing..." : "↻ Sync"}
+            </button>
+          )}
+          <button
+            onClick={() => onModal("add-tiktok")}
+            className="px-4 py-2 rounded-xl text-sm font-medium text-white"
+            style={{ background: "linear-gradient(135deg, #9d4edd, #e040fb)" }}
+          >
+            + Add Account
+          </button>
+        </div>
       </div>
 
       {data.tiktokAccounts.length === 0 ? (

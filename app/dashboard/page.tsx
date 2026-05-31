@@ -1093,14 +1093,22 @@ function AddTikTokModal({
   onClose: () => void;
   onAdd: (a: TikTokAccount) => void;
 }) {
-  const [form, setForm] = useState({ username: "", niche: "", followers: "" });
+  const [form, setForm] = useState({ usernameOrUrl: "", niche: "", followers: "" });
+
+  function extractUsername(input: string): string {
+    // Handle URLs like https://www.tiktok.com/@username or @username or username
+    const urlMatch = input.match(/tiktok\.com\/@?([^/?&\s]+)/i);
+    if (urlMatch) return urlMatch[1];
+    return input.replace("@", "").trim();
+  }
 
   function submit(e: React.FormEvent) {
     e.preventDefault();
-    if (!form.username || !form.niche) return;
+    if (!form.usernameOrUrl || !form.niche) return;
+    const username = extractUsername(form.usernameOrUrl);
     onAdd({
       id: Date.now().toString(),
-      username: form.username.replace("@", ""),
+      username,
       niche: form.niche,
       followers: parseInt(form.followers) || 0,
       followerHistory: [
@@ -1119,9 +1127,9 @@ function AddTikTokModal({
       <h2 className="text-lg font-bold mb-4 gradient-text">Add TikTok Account</h2>
       <form onSubmit={submit} className="space-y-3">
         <input
-          placeholder="@username"
-          value={form.username}
-          onChange={(e) => setForm((f) => ({ ...f, username: e.target.value }))}
+          placeholder="@username or https://tiktok.com/@username"
+          value={form.usernameOrUrl}
+          onChange={(e) => setForm((f) => ({ ...f, usernameOrUrl: e.target.value }))}
           required
           className="w-full px-4 py-3 rounded-xl text-sm text-white placeholder-gray-500 outline-none"
           style={{ background: "rgba(5,5,8,0.8)", border: "1px solid rgba(42,42,64,0.8)" }}

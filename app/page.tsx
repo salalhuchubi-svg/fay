@@ -2,7 +2,7 @@
 import { useState, useEffect, useRef, useCallback } from "react";
 import { motion, AnimatePresence } from "framer-motion";
 import NavBar from "./components/NavBar";
-import VoiceOrb from "./components/VoiceOrb";
+import NeuralNetwork from "./components/NeuralNetwork";
 import { loadData } from "./lib/store";
 import type { Message } from "./lib/types";
 
@@ -11,30 +11,62 @@ export default function HomePage() {
   const [listening, setListening] = useState(false);
   const [speaking, setSpeaking] = useState(false);
   const [transcript, setTranscript] = useState("");
-  const [wakeActive, setWakeActive] = useState(false);
   const [statusText, setStatusText] = useState('Say "Fay" to wake me up');
   const [inputText, setInputText] = useState("");
+  const [lastReply, setLastReply] = useState("");
+  const [mounted, setMounted] = useState(false);
 
   const recognitionRef = useRef<SpeechRecognition | null>(null);
-  const wakeRecognitionRef = useRef<SpeechRecognition | null>(null);
-  const messagesEndRef = useRef<HTMLDivElement>(null);
-  const synthRef = useRef<SpeechSynthesisUtterance | null>(null);
-
-  useEffect(() => {
-    messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
-  }, [messages]);
-
+  const wakeRef = useRef<SpeechRecognition | null>(null);
   const audioRef = useRef<HTMLAudioElement | null>(null);
+  const speakingRef = useRef(false);
+  const listeningRef = useRef(false);
+  const messagesRef = useRef<Message[]>([]);
+  const messagesEndRef = useRef<HTMLDivElement>(null);
 
-  const speak = useCallback(async (text: string) => {
-    try {
-      // Stop any current audio
-      if (audioRef.current) {
-        audioRef.current.pause();
-        audioRef.current = null;
+  useEffect(() => { setMounted(true); }, []);
+  useEffect(() => { messagesRef.current = messages; }, [messages]);
+  useEffect(() => { messagesEndRef.current?.scrollIntoView({ behavior: "smooth" }); }, [messages]);
+
+  function getSR() {
+    return (
+      (window as unknown as { SpeechRecognition?: typeof SpeechRecognition }).SpeechRecognition ||
+      (window as unknown as { webkitSpeechRecognition?: typeof SpeechRecognition }).webkitSpeechRecognition ||
+      null
+    );
+  }
+
+  const startWake = useCallback(() => {
+    if (speakingRef.current || listeningRef.current) return;
+    const SR = getSR();
+    if (!SR) return;
+    try { wakeRef.current?.abort(); } catch {}
+
+    const rec = new SR();
+    rec.continuous = false;
+    rec.interimResults = false;
+    rec.lang = "en-US";
+
+    rec.onresult = (e: SpeechRecognitionEvent) => {
+      const said = e.results[0][0].transcript.toLowerCase();
+      if (said.includes("fay") || said.includes("hey fay")) {
+        setStatusText("Yes? Listening...");
+        setTimeout(() => startListening(), 100);
       }
+    };
+    rec.onend = () => { if (!speakingRef.current && !listeningRef.current) setTimeout(startWake, 500); };
+    rec.onerror = () => { setTimeout(startWake, 1500); };
+    wakeRef.current = rec;
+    try { rec.start(); } catch {}
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
+  const doSpeak = useCallback(async (text: string) => {
+    try {
+      if (audioRef.current) { audioRef.current.pause(); audioRef.current = null; }
+      speakingRef.current = true;
       setSpeaking(true);
+      setLastReply(text);
 
       const res = await fetch("/api/speak", {
         method: "POST",
@@ -42,390 +74,228 @@ export default function HomePage() {
         body: JSON.stringify({ text }),
       });
 
-      if (!res.ok) throw new Error("TTS failed");
+      if (!res.ok) throw new Error("speak failed");
 
       const blob = await res.blob();
       const url = URL.createObjectURL(blob);
       const audio = new Audio(url);
       audioRef.current = audio;
 
-      audio.onended = () => {
+      const done = () => {
+        speakingRef.current = false;
         setSpeaking(false);
         URL.revokeObjectURL(url);
-      };
-      audio.onerror = () => {
-        setSpeaking(false);
-        URL.revokeObjectURL(url);
+        audioRef.current = null;
+        setTimeout(startWake, 500);
       };
 
+      audio.onended = done;
+      audio.onerror = done;
       await audio.play();
-    } catch (err) {
-      console.error("[speak] error:", err);
+    } catch {
+      speakingRef.current = false;
       setSpeaking(false);
-      // Fallback to browser TTS
-      if (window.speechSynthesis) {
-        const utter = new SpeechSynthesisUtterance(text);
-        utter.rate = 0.95;
-        setSpeaking(true);
-        utter.onend = () => setSpeaking(false);
-        window.speechSynthesis.speak(utter);
-      }
+      setTimeout(startWake, 500);
     }
-  }, []);
+  }, [startWake]);
 
-  const sendMessage = useCallback(
-    async (text: string) => {
-      if (!text.trim()) return;
-      const userMsg: Message = {
-        id: Date.now().toString(),
-        role: "user",
-        text: text.trim(),
-        timestamp: new Date().toISOString(),
-      };
+  const sendMessage = useCallback(async (text: string) => {
+    if (!text.trim()) return;
+    const userMsg: Message = { id: Date.now().toString(), role: "user", text: text.trim(), timestamp: new Date().toISOString() };
+    setMessages(prev => [...prev, userMsg]);
+    setStatusText("Thinking...");
 
-      setMessages((prev) => [...prev, userMsg]);
-      setStatusText("Thinking...");
-
-      try {
-        const data = loadData();
-        const res = await fetch("/api/fay", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            messages: [...messages, userMsg].slice(-10),
-            context: {
-              tiktokAccounts: data.tiktokAccounts.map((a) => ({
-                username: a.username,
-                niche: a.niche,
-                followers: a.followers,
-              })),
-              pendingTasks: data.tasks.filter((t) => !t.done).length,
-              recentRevenue: data.transactions
-                .filter((t) => t.type === "income")
-                .slice(-5)
-                .reduce((s, t) => s + t.amount, 0),
-            },
-          }),
-        });
-
-        const { text: reply } = await res.json();
-        const fayMsg: Message = {
-          id: (Date.now() + 1).toString(),
-          role: "fay",
-          text: reply,
-          timestamp: new Date().toISOString(),
-        };
-        setMessages((prev) => [...prev, fayMsg]);
-        setStatusText("Listening...");
-        speak(reply);
-      } catch {
-        setStatusText('Say "Fay" to wake me up');
-      }
-    },
-    [messages, speak]
-  );
+    try {
+      const data = loadData();
+      const res = await fetch("/api/fay", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          messages: [...messagesRef.current, userMsg].slice(-10),
+          context: {
+            tiktokAccounts: data.tiktokAccounts.map(a => ({ username: a.username, niche: a.niche, followers: a.followers })),
+            pendingTasks: data.tasks.filter(t => !t.done).length,
+            recentRevenue: data.transactions.filter(t => t.type === "income").slice(-5).reduce((s, t) => s + t.amount, 0),
+          },
+        }),
+      });
+      const { text: reply } = await res.json();
+      const fayMsg: Message = { id: (Date.now() + 1).toString(), role: "fay", text: reply, timestamp: new Date().toISOString() };
+      setMessages(prev => [...prev, fayMsg]);
+      setStatusText('Say "Fay" to wake me up');
+      doSpeak(reply);
+    } catch {
+      setStatusText('Say "Fay" to wake me up');
+      setTimeout(startWake, 500);
+    }
+  }, [doSpeak, startWake]);
 
   const startListening = useCallback(() => {
-    if (!("webkitSpeechRecognition" in window || "SpeechRecognition" in window))
-      return;
-
-    const SR =
-      (window as unknown as { SpeechRecognition?: typeof SpeechRecognition }).SpeechRecognition ||
-      (window as unknown as { webkitSpeechRecognition?: typeof SpeechRecognition }).webkitSpeechRecognition;
+    const SR = getSR();
     if (!SR) return;
+    try { wakeRef.current?.abort(); } catch {}
+    try { recognitionRef.current?.abort(); } catch {}
+
     const rec = new SR();
     rec.continuous = false;
     rec.interimResults = true;
     rec.lang = "en-US";
 
-    let silenceTimer: ReturnType<typeof setTimeout> | null = null;
-    let capturedFinal = "";
+    let timer: ReturnType<typeof setTimeout> | null = null;
+    let final = "";
 
-    const stopAndSend = () => {
-      if (silenceTimer) clearTimeout(silenceTimer);
+    const done = () => {
+      if (timer) clearTimeout(timer);
       rec.stop();
-      if (capturedFinal.trim()) {
-        sendMessage(capturedFinal.trim());
-        capturedFinal = "";
-      }
+      const t = final.trim();
       setTranscript("");
+      setListening(false);
+      listeningRef.current = false;
+      if (t) sendMessage(t);
+      else setTimeout(startWake, 300);
     };
 
     rec.onstart = () => {
+      listeningRef.current = true;
       setListening(true);
       setStatusText("Listening...");
-      // auto-stop after 8 seconds max
-      silenceTimer = setTimeout(stopAndSend, 8000);
+      timer = setTimeout(done, 8000);
     };
 
     rec.onresult = (e: SpeechRecognitionEvent) => {
       let interim = "";
-      let final = "";
       for (let i = e.resultIndex; i < e.results.length; i++) {
         if (e.results[i].isFinal) final += e.results[i][0].transcript;
         else interim += e.results[i][0].transcript;
       }
-      if (final) capturedFinal += final;
-      setTranscript(capturedFinal || interim);
-
-      // reset silence timer — stop 1.2s after last speech
-      if (silenceTimer) clearTimeout(silenceTimer);
-      silenceTimer = setTimeout(stopAndSend, 1200);
+      setTranscript(final || interim);
+      if (timer) clearTimeout(timer);
+      timer = setTimeout(done, 1500);
     };
 
-    rec.onspeechend = () => {
-      if (silenceTimer) clearTimeout(silenceTimer);
-      silenceTimer = setTimeout(stopAndSend, 600);
-    };
-
+    rec.onspeechend = () => { if (timer) clearTimeout(timer); timer = setTimeout(done, 800); };
     rec.onend = () => {
+      listeningRef.current = false;
       setListening(false);
       setTranscript("");
-      if (capturedFinal.trim()) {
-        sendMessage(capturedFinal.trim());
-        capturedFinal = "";
-      }
+      if (final.trim()) { sendMessage(final.trim()); }
+      else setTimeout(startWake, 300);
     };
-
     rec.onerror = () => {
-      if (silenceTimer) clearTimeout(silenceTimer);
+      if (timer) clearTimeout(timer);
+      listeningRef.current = false;
       setListening(false);
       setTranscript("");
+      setTimeout(startWake, 500);
     };
 
     recognitionRef.current = rec;
-    rec.start();
-  }, [sendMessage]);
+    try { rec.start(); } catch {}
+  }, [sendMessage, startWake]);
 
-  // Wake word listener
+  // Boot wake word
   useEffect(() => {
-    if (!("webkitSpeechRecognition" in window || "SpeechRecognition" in window))
-      return;
+    const t = setTimeout(startWake, 800);
+    return () => { clearTimeout(t); try { wakeRef.current?.abort(); } catch {} };
+  }, [startWake]);
 
-    const SR =
-      (window as unknown as { SpeechRecognition?: typeof SpeechRecognition }).SpeechRecognition ||
-      (window as unknown as { webkitSpeechRecognition?: typeof SpeechRecognition }).webkitSpeechRecognition;
-    if (!SR) return;
+  // Greeting
+  useEffect(() => {
+    if (!mounted) return;
+    if (sessionStorage.getItem("fay_g3")) return;
+    sessionStorage.setItem("fay_g3", "1");
+    const h = new Date().getHours();
+    const g = h < 12 ? "Good morning" : h < 17 ? "Good afternoon" : "Good evening";
+    const text = `${g}. I'm Fay. Say my name to wake me up, or use the mic button below.`;
+    setMessages([{ id: "g", role: "fay", text, timestamp: new Date().toISOString() }]);
+    setLastReply(text);
+  }, [mounted]);
 
-    let active = true;
-
-    const startWake = () => {
-      if (!active) return;
-      const rec = new SR();
-      rec.continuous = false;
-      rec.interimResults = false;
-      rec.lang = "en-US";
-
-      rec.onresult = (e: SpeechRecognitionEvent) => {
-        const said = e.results[0][0].transcript.toLowerCase().trim();
-        if (said.includes("fay") || said.includes("hey fay")) {
-          setWakeActive(true);
-          setStatusText("Yes? I'm listening...");
-          setTimeout(() => setWakeActive(false), 200);
-          setTimeout(() => startListening(), 300);
-        }
-      };
-
-      rec.onend = () => {
-        if (active && !listening) setTimeout(startWake, 500);
-      };
-
-      rec.onerror = () => {
-        if (active) setTimeout(startWake, 1000);
-      };
-
-      wakeRecognitionRef.current = rec;
-      try {
-        rec.start();
-      } catch {}
-    };
-
-    const t = setTimeout(startWake, 1000);
-    return () => {
-      active = false;
-      clearTimeout(t);
-      wakeRecognitionRef.current?.abort();
-    };
-  }, [listening, startListening]);
-
-  async function handleTextSubmit(e: React.FormEvent) {
+  async function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
     if (!inputText.trim()) return;
     sendMessage(inputText);
     setInputText("");
   }
 
-  // Greeting on first load
-  useEffect(() => {
-    const hasGreeted = sessionStorage.getItem("fay_greeted");
-    if (!hasGreeted) {
-      sessionStorage.setItem("fay_greeted", "1");
-      const hour = new Date().getHours();
-      const greeting =
-        hour < 12
-          ? "Good morning"
-          : hour < 17
-          ? "Good afternoon"
-          : "Good evening";
-      const greetMsg: Message = {
-        id: "greeting",
-        role: "fay",
-        text: `${greeting}! I'm Fay, your personal business assistant. Say my name to wake me up, or type below. I'm here to help you track your TikTok accounts, manage your business, and grow. What do you need today?`,
-        timestamp: new Date().toISOString(),
-      };
-      setMessages([greetMsg]);
-    }
-  }, []);
+  if (!mounted) return null;
 
   return (
-    <div
-      className="min-h-screen flex flex-col"
-      style={{ background: "#050508" }}
-    >
-      {/* Background orbs */}
-      <div
-        className="fixed pointer-events-none"
-        style={{
-          width: 500,
-          height: 500,
-          borderRadius: "50%",
-          background: "radial-gradient(circle, rgba(157,78,221,0.12), transparent)",
-          top: "-100px",
-          left: "-100px",
-          filter: "blur(60px)",
-        }}
-      />
-      <div
-        className="fixed pointer-events-none"
-        style={{
-          width: 400,
-          height: 400,
-          borderRadius: "50%",
-          background: "radial-gradient(circle, rgba(0,229,255,0.08), transparent)",
-          bottom: "-50px",
-          right: "-50px",
-          filter: "blur(60px)",
-        }}
-      />
-
+    <div className="min-h-screen flex flex-col relative overflow-hidden" style={{ background: "#020208" }}>
+      <NeuralNetwork listening={listening} speaking={speaking} transcript={transcript} />
       <NavBar />
 
-      <div className="flex flex-col flex-1 pt-20 pb-6 max-w-2xl mx-auto w-full px-4">
-        {/* Orb + wake text */}
-        <div className="flex flex-col items-center pt-8 pb-6">
-          <motion.div
-            animate={wakeActive ? { scale: [1, 1.2, 1] } : {}}
-            transition={{ duration: 0.3 }}
-          >
-            <VoiceOrb
-              listening={listening}
-              speaking={speaking}
-              onClick={listening ? () => recognitionRef.current?.stop() : startListening}
-            />
+      <div className="relative z-10 flex flex-col flex-1 pt-16">
+        {/* Top left status */}
+        <div className="absolute top-20 left-4 md:left-8">
+          <motion.div className="flex items-center gap-2" animate={{ opacity: [0.6, 1, 0.6] }} transition={{ duration: 2, repeat: Infinity }}>
+            <div className="w-2 h-2 rounded-full" style={{ background: speaking ? "#00e5ff" : listening ? "#e040fb" : "#9d4edd" }} />
+            <span className="text-xs font-mono" style={{ color: speaking ? "#00e5ff" : listening ? "#e040fb" : "#9d4edd" }}>
+              {statusText}
+            </span>
           </motion.div>
-
-          <motion.p
-            className="mt-4 text-sm"
-            style={{ color: listening ? "#9d4edd" : "#8888aa" }}
-            animate={{ opacity: [0.7, 1, 0.7] }}
-            transition={{ duration: 2, repeat: Infinity }}
-          >
-            {statusText}
-          </motion.p>
-
-          {transcript && (
-            <motion.p
-              initial={{ opacity: 0 }}
-              animate={{ opacity: 1 }}
-              className="mt-2 text-sm italic"
-              style={{ color: "#b0b0cc" }}
-            >
-              "{transcript}"
-            </motion.p>
-          )}
         </div>
 
-        {/* Chat messages */}
-        <div className="flex-1 overflow-y-auto space-y-4 pb-4">
-          <AnimatePresence initial={false}>
-            {messages.map((msg) => (
+        {/* Last reply - center */}
+        <div className="absolute inset-x-0 bottom-28 flex justify-center px-4 pointer-events-none">
+          <AnimatePresence mode="wait">
+            {lastReply && (
               <motion.div
-                key={msg.id}
-                initial={{ opacity: 0, y: 12 }}
+                key={lastReply.slice(0, 20)}
+                initial={{ opacity: 0, y: 8 }}
                 animate={{ opacity: 1, y: 0 }}
-                transition={{ duration: 0.3 }}
-                className={`flex ${msg.role === "user" ? "justify-end" : "justify-start"}`}
+                exit={{ opacity: 0 }}
+                className="text-center max-w-xl"
               >
-                <div
-                  className="max-w-xs md:max-w-md px-4 py-3 rounded-2xl text-sm leading-relaxed"
-                  style={
-                    msg.role === "user"
-                      ? {
-                          background:
-                            "linear-gradient(135deg, #9d4edd, #e040fb)",
-                          color: "#fff",
-                          borderBottomRightRadius: 4,
-                        }
-                      : {
-                          background: "rgba(18,18,28,0.9)",
-                          border: "1px solid rgba(42,42,64,0.8)",
-                          color: "#e0e0f0",
-                          borderBottomLeftRadius: 4,
-                        }
-                  }
-                >
-                  {msg.role === "fay" && (
-                    <span
-                      className="text-xs font-semibold block mb-1 gradient-text"
-                    >
-                      Fay
-                    </span>
-                  )}
-                  {msg.text}
-                </div>
+                <p className="text-xs font-mono mb-1" style={{ color: "#9d4edd" }}>// FAY</p>
+                <p className="text-sm md:text-base leading-relaxed" style={{ color: "rgba(255,255,255,0.85)", textShadow: "0 0 20px rgba(157,78,221,0.5)" }}>
+                  {lastReply}
+                </p>
               </motion.div>
-            ))}
+            )}
           </AnimatePresence>
-          <div ref={messagesEndRef} />
         </div>
 
-        {/* Text input */}
-        <form
-          onSubmit={handleTextSubmit}
-          className="flex items-center gap-3 mt-2"
-        >
-          <input
-            type="text"
-            value={inputText}
-            onChange={(e) => setInputText(e.target.value)}
-            placeholder="Type a message..."
-            className="flex-1 px-4 py-3 rounded-2xl text-sm text-white placeholder-gray-500 outline-none transition-all"
-            style={{
-              background: "rgba(18,18,28,0.8)",
-              border: "1px solid rgba(42,42,64,0.8)",
-            }}
-          />
-          <motion.button
-            type="submit"
-            whileHover={{ scale: 1.05 }}
-            whileTap={{ scale: 0.95 }}
-            disabled={!inputText.trim()}
-            className="w-12 h-12 rounded-2xl flex items-center justify-center disabled:opacity-40"
-            style={{
-              background: "linear-gradient(135deg, #9d4edd, #e040fb)",
-            }}
-          >
-            <svg width="18" height="18" viewBox="0 0 24 24" fill="none">
-              <path
-                d="M22 2L11 13M22 2L15 22L11 13M22 2L2 9L11 13"
-                stroke="white"
-                strokeWidth="2"
-                strokeLinecap="round"
-                strokeLinejoin="round"
+        {/* Bottom input bar */}
+        <div className="absolute bottom-0 inset-x-0 p-4 flex justify-center">
+          <form onSubmit={handleSubmit} className="flex items-center gap-3 w-full max-w-lg">
+            <div className="flex-1 relative">
+              <span className="absolute left-3 top-1/2 -translate-y-1/2 text-xs font-mono pointer-events-none" style={{ color: "#9d4edd" }}>&gt;_</span>
+              <input
+                type="text"
+                value={inputText}
+                onChange={e => setInputText(e.target.value)}
+                placeholder="Type to Fay..."
+                className="w-full pl-8 pr-4 py-3 rounded-xl text-sm text-white placeholder-gray-600 outline-none font-mono"
+                style={{ background: "rgba(5,5,15,0.85)", border: "1px solid rgba(157,78,221,0.35)", backdropFilter: "blur(10px)" }}
               />
-            </svg>
-          </motion.button>
-        </form>
+            </div>
+
+            {/* Send */}
+            <motion.button type="submit" whileTap={{ scale: 0.92 }} disabled={!inputText.trim()}
+              className="w-11 h-11 rounded-xl flex items-center justify-center disabled:opacity-30"
+              style={{ background: "linear-gradient(135deg,#9d4edd,#e040fb)" }}>
+              <svg width="15" height="15" viewBox="0 0 24 24" fill="none">
+                <path d="M22 2L11 13M22 2L15 22L11 13M22 2L2 9L11 13" stroke="white" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" />
+              </svg>
+            </motion.button>
+
+            {/* Mic */}
+            <motion.button type="button" whileTap={{ scale: 0.92 }}
+              onClick={() => listening ? recognitionRef.current?.stop() : startListening()}
+              className="w-11 h-11 rounded-xl flex items-center justify-center"
+              style={{
+                background: listening ? "rgba(224,64,251,0.25)" : "rgba(157,78,221,0.15)",
+                border: `1px solid ${listening ? "#e040fb88" : "rgba(157,78,221,0.35)"}`,
+                backdropFilter: "blur(10px)",
+              }}>
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none">
+                <path d="M12 1a3 3 0 0 0-3 3v8a3 3 0 0 0 6 0V4a3 3 0 0 0-3-3z" fill={listening ? "#e040fb" : "#9d4edd"} />
+                <path d="M19 10v2a7 7 0 0 1-14 0v-2M12 19v4M8 23h8" stroke={listening ? "#e040fb" : "#9d4edd"} strokeWidth="2" strokeLinecap="round" />
+              </svg>
+            </motion.button>
+          </form>
+        </div>
       </div>
     </div>
   );

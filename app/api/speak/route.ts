@@ -9,10 +9,12 @@ export async function POST(req: NextRequest) {
     if (!text) return NextResponse.json({ error: "No text" }, { status: 400 });
 
     const clean = text
-      .replace(/[#*_~`]/g, "")
+      .replace(/[#*_~`\/\\|<>{}[\]^@]/g, "")
+      .replace(/\/\//g, "")
       .replace(/\n+/g, " ")
+      .replace(/\s+/g, " ")
       .trim()
-      .slice(0, 500); // ElevenLabs free tier limit
+      .slice(0, 400);
 
     const res = await fetch(
       `https://api.elevenlabs.io/v1/text-to-speech/${VOICE_ID}`,
@@ -25,7 +27,7 @@ export async function POST(req: NextRequest) {
         },
         body: JSON.stringify({
           text: clean,
-          model_id: "eleven_turbo_v2",
+          model_id: "eleven_flash_v2_5",
           voice_settings: {
             stability: 0.5,
             similarity_boost: 0.75,

@@ -24,42 +24,53 @@ export default function HomePage() {
     messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
   }, [messages]);
 
-  const speak = useCallback((text: string) => {
-    if (!window.speechSynthesis) return;
-    window.speechSynthesis.cancel();
+  const audioRef = useRef<HTMLAudioElement | null>(null);
 
-    // Clean text — remove any markdown or special chars before speaking
-    const cleanText = text
-      .replace(/[#*_~`]/g, "")
-      .replace(/\n+/g, ". ")
-      .trim();
+  const speak = useCallback(async (text: string) => {
+    try {
+      // Stop any current audio
+      if (audioRef.current) {
+        audioRef.current.pause();
+        audioRef.current = null;
+      }
 
-    const utter = new SpeechSynthesisUtterance(cleanText);
-    utter.rate = 0.95;
-    utter.pitch = 1.0;
-    utter.volume = 1;
+      setSpeaking(true);
 
-    const voices = window.speechSynthesis.getVoices();
+      const res = await fetch("/api/speak", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ text }),
+      });
 
-    // Priority order — most natural sounding voices
-    const preferred =
-      voices.find(v => v.name === "Google UK English Female") ||
-      voices.find(v => v.name === "Samantha") ||
-      voices.find(v => v.name === "Karen") ||
-      voices.find(v => v.name === "Ava") ||
-      voices.find(v => v.name === "Victoria") ||
-      voices.find(v => v.name === "Allison") ||
-      voices.find(v => v.name.includes("Google") && v.lang.startsWith("en")) ||
-      voices.find(v => v.lang === "en-GB" && !v.name.includes("Male")) ||
-      voices.find(v => v.lang === "en-US" && !v.name.includes("Male")) ||
-      voices.find(v => v.lang.startsWith("en"));
+      if (!res.ok) throw new Error("TTS failed");
 
-    if (preferred) utter.voice = preferred;
-    synthRef.current = utter;
-    setSpeaking(true);
-    utter.onend = () => setSpeaking(false);
-    utter.onerror = () => setSpeaking(false);
-    window.speechSynthesis.speak(utter);
+      const blob = await res.blob();
+      const url = URL.createObjectURL(blob);
+      const audio = new Audio(url);
+      audioRef.current = audio;
+
+      audio.onended = () => {
+        setSpeaking(false);
+        URL.revokeObjectURL(url);
+      };
+      audio.onerror = () => {
+        setSpeaking(false);
+        URL.revokeObjectURL(url);
+      };
+
+      await audio.play();
+    } catch (err) {
+      console.error("[speak] error:", err);
+      setSpeaking(false);
+      // Fallback to browser TTS
+      if (window.speechSynthesis) {
+        const utter = new SpeechSynthesisUtterance(text);
+        utter.rate = 0.95;
+        setSpeaking(true);
+        utter.onend = () => setSpeaking(false);
+        window.speechSynthesis.speak(utter);
+      }
+    }
   }, []);
 
   const sendMessage = useCallback(

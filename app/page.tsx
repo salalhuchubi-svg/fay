@@ -113,9 +113,24 @@ export default function HomePage() {
     rec.interimResults = true;
     rec.lang = "en-US";
 
+    let silenceTimer: ReturnType<typeof setTimeout> | null = null;
+    let capturedFinal = "";
+
+    const stopAndSend = () => {
+      if (silenceTimer) clearTimeout(silenceTimer);
+      rec.stop();
+      if (capturedFinal.trim()) {
+        sendMessage(capturedFinal.trim());
+        capturedFinal = "";
+      }
+      setTranscript("");
+    };
+
     rec.onstart = () => {
       setListening(true);
       setStatusText("Listening...");
+      // auto-stop after 8 seconds max
+      silenceTimer = setTimeout(stopAndSend, 8000);
     };
 
     rec.onresult = (e: SpeechRecognitionEvent) => {
@@ -125,19 +140,30 @@ export default function HomePage() {
         if (e.results[i].isFinal) final += e.results[i][0].transcript;
         else interim += e.results[i][0].transcript;
       }
-      setTranscript(final || interim);
-      if (final) {
-        sendMessage(final);
-        setTranscript("");
-      }
+      if (final) capturedFinal += final;
+      setTranscript(capturedFinal || interim);
+
+      // reset silence timer — stop 1.2s after last speech
+      if (silenceTimer) clearTimeout(silenceTimer);
+      silenceTimer = setTimeout(stopAndSend, 1200);
+    };
+
+    rec.onspeechend = () => {
+      if (silenceTimer) clearTimeout(silenceTimer);
+      silenceTimer = setTimeout(stopAndSend, 600);
     };
 
     rec.onend = () => {
       setListening(false);
       setTranscript("");
+      if (capturedFinal.trim()) {
+        sendMessage(capturedFinal.trim());
+        capturedFinal = "";
+      }
     };
 
     rec.onerror = () => {
+      if (silenceTimer) clearTimeout(silenceTimer);
       setListening(false);
       setTranscript("");
     };

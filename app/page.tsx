@@ -15,6 +15,7 @@ export default function HomePage() {
   const [inputText, setInputText] = useState("");
   const [lastReply, setLastReply] = useState("");
   const [mounted, setMounted] = useState(false);
+  const [stats, setStats] = useState({ followers: 0, tasks: 0, revenue: 0, accounts: [] as string[] });
 
   const recognitionRef = useRef<SpeechRecognition | null>(null);
   const wakeRef = useRef<SpeechRecognition | null>(null);
@@ -24,7 +25,17 @@ export default function HomePage() {
   const messagesRef = useRef<Message[]>([]);
   const messagesEndRef = useRef<HTMLDivElement>(null);
 
-  useEffect(() => { setMounted(true); }, []);
+  useEffect(() => {
+    setMounted(true);
+    const d = loadData();
+    setStats({
+      followers: d.tiktokAccounts.reduce((s,a) => s+a.followers, 0),
+      tasks: d.tasks.filter(t => !t.done).length,
+      revenue: d.transactions.filter(t => t.type==="income").reduce((s,t) => s+t.amount, 0) -
+               d.transactions.filter(t => t.type==="expense").reduce((s,t) => s+t.amount, 0),
+      accounts: d.tiktokAccounts.map(a => a.username),
+    });
+  }, []);
   useEffect(() => { messagesRef.current = messages; }, [messages]);
   useEffect(() => { messagesEndRef.current?.scrollIntoView({ behavior: "smooth" }); }, [messages]);
 
@@ -222,7 +233,7 @@ export default function HomePage() {
 
   return (
     <div className="min-h-screen flex flex-col relative overflow-hidden" style={{ background: "#020208" }}>
-      <NeuralNetwork listening={listening} speaking={speaking} transcript={transcript} />
+      <NeuralNetwork listening={listening} speaking={speaking} transcript={transcript} stats={stats} />
       <NavBar />
 
       <div className="relative z-10 flex flex-col flex-1 pt-16">

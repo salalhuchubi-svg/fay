@@ -204,10 +204,13 @@ export default function HomePage() {
     try { rec.start(); } catch {}
   }, [sendMessage, startWake]);
 
-  // Boot wake word
+  // Request mic permission on first load, then start wake word
   useEffect(() => {
-    const t = setTimeout(startWake, 800);
-    return () => { clearTimeout(t); try { wakeRef.current?.abort(); } catch {} };
+    let cancelled = false;
+    navigator.mediaDevices?.getUserMedia({ audio: true })
+      .then(() => { if (!cancelled) setTimeout(startWake, 500); })
+      .catch(() => { if (!cancelled) setTimeout(startWake, 500); });
+    return () => { cancelled = true; try { wakeRef.current?.abort(); } catch {} };
   }, [startWake]);
 
   // Greeting

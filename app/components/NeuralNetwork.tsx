@@ -24,294 +24,299 @@ export default function NeuralNetwork({ listening, speaking, transcript, stats }
 
     let W = window.innerWidth, H = window.innerHeight;
     canvas.width = W; canvas.height = H;
-    const onResize = () => { W = window.innerWidth; H = window.innerHeight; canvas.width = W; canvas.height = H; initParticles(); };
+
+    const onResize = () => {
+      W = window.innerWidth; H = window.innerHeight;
+      canvas.width = W; canvas.height = H;
+    };
     window.addEventListener("resize", onResize);
 
-    // ── Oval particle cloud ──
-    type Particle = { ax: number; ay: number; x: number; y: number; vx: number; vy: number; size: number; opacity: number; };
-    let particles: Particle[] = [];
+    // Business node labels with colors
+    const NODES = [
+      { label: "TIKTOK", color: "#4fc3f7" },
+      { label: "VIRAL", color: "#ce93d8" },
+      { label: "GROWTH", color: "#80cbc4" },
+      { label: "CONTENT", color: "#f48fb1" },
+      { label: "HOOKS", color: "#fff176" },
+      { label: "TRENDS", color: "#4fc3f7" },
+      { label: "REVENUE", color: "#a5d6a7" },
+      { label: "ENGAGE", color: "#ce93d8" },
+      { label: "STRATEGY", color: "#80cbc4" },
+      { label: "ANALYTICS", color: "#f48fb1" },
+      { label: "FINANCE", color: "#a5d6a7" },
+      { label: "IDEAS", color: "#fff176" },
+      { label: "POSTS", color: "#4fc3f7" },
+      { label: "REACH", color: "#ce93d8" },
+      { label: "BRAND", color: "#80cbc4" },
+      { label: "VOICE", color: "#f48fb1" },
+    ];
 
-    const initParticles = () => {
-      particles = [];
-      const cx = W / 2, cy = H / 2;
-      const rx = Math.min(W, H) * 0.28;
-      const ry = Math.min(W, H) * 0.38;
-      for (let i = 0; i < 1800; i++) {
-        // Random point inside oval with gaussian-ish distribution
-        const angle = Math.random() * Math.PI * 2;
-        const r = Math.sqrt(Math.random());
-        const noise = 0.3 + Math.random() * 0.7;
-        const ax = cx + Math.cos(angle) * rx * r * noise;
-        const ay = cy + Math.sin(angle) * ry * r * noise;
-        particles.push({ ax, ay, x: ax, y: ay, vx: (Math.random() - 0.5) * 0.3, vy: (Math.random() - 0.5) * 0.3, size: 0.5 + Math.random() * 1.5, opacity: 0.3 + Math.random() * 0.7 });
+    // Right side labels (like the reference image)
+    const RIGHT_LABELS = ["TIKTOK", "CONTENT", "MOTOR", "CONCEPT", "STRATEGY", "ANALYTICS", "BRAND", "REVENUE", "FINANCE", "IDEAS", "TTS", "WEB"];
+
+    type Node = { x: number; y: number; vx: number; vy: number; angle: number; r: number; label: string; color: string; size: number; phase: number };
+    const nodes: Node[] = [];
+
+    const cx = () => W / 2;
+    const cy = () => H / 2;
+
+    // Place nodes spreading across screen
+    NODES.forEach((n, i) => {
+      const layer = Math.floor(i / 4) + 1;
+      const slot = i % 4;
+      const baseAngle = (slot / 4) * Math.PI * 2 + layer * 0.6;
+      const spread = Math.min(W, H) * 0.12 * layer;
+      const jitter = (Math.random() - 0.5) * spread * 0.4;
+      nodes.push({
+        x: cx() + Math.cos(baseAngle) * (spread + jitter),
+        y: cy() + Math.sin(baseAngle) * (spread + jitter) * 0.85,
+        vx: (Math.random() - 0.5) * 0.2,
+        vy: (Math.random() - 0.5) * 0.2,
+        angle: baseAngle,
+        r: spread + jitter,
+        label: n.label,
+        color: n.color,
+        size: Math.max(4, 9 - layer * 1.2),
+        phase: Math.random() * Math.PI * 2,
+      });
+    });
+
+    // Connections
+    const conns: [number, number][] = [];
+    nodes.forEach((_, i) => {
+      const layer = Math.floor(i / 4) + 1;
+      if (layer === 1) {
+        conns.push([-1, i]);
+      } else {
+        const prevBase = (layer - 2) * 4;
+        conns.push([prevBase + (i % 4), i]);
+        // Extra cross connections
+        if (i % 4 < 3) conns.push([i, i + 1]);
       }
-    };
-    initParticles();
+    });
 
-    // ── Radar ──
-    let radarAngle = 0;
-    let radarBlips: { angle: number; r: number; life: number }[] = [];
-    for (let i = 0; i < 6; i++) radarBlips.push({ angle: Math.random() * Math.PI * 2, r: Math.random() * 0.8 + 0.1, life: Math.random() });
+    // Particles along connections
+    type P = { conn: number; t: number; speed: number };
+    const particles: P[] = conns.map((_, i) => ({ conn: i, t: Math.random(), speed: 0.003 + Math.random() * 0.006 }));
 
-    // ── Waveform data ──
-    const waveData = Array.from({ length: 40 }, () => Math.random());
-
-    let time = 0;
-    const FPS = 30;
+    let t = 0;
 
     function draw(now: number) {
       animRef.current = requestAnimationFrame(draw);
-      if (now - lastFrameRef.current < 1000 / FPS) return;
+      if (now - lastFrameRef.current < 33) return; // 30fps
       lastFrameRef.current = now;
 
       const { listening, speaking, transcript: tr, stats } = stateRef.current;
-      const cx = W / 2, cy = H / 2;
-      const accent = speaking ? "#00e5ff" : listening ? "#e040fb" : "#9d4edd";
-      const accentDim = accent + "88";
+      const ccx = W / 2, ccy = H / 2;
+      const active = speaking || listening;
 
-      // ── Background ──
-      ctx.fillStyle = "#020210";
+      // Background — deep dark blue
+      ctx.fillStyle = "#010614";
       ctx.fillRect(0, 0, W, H);
 
-      // Grid
-      ctx.strokeStyle = accent + "18";
-      ctx.lineWidth = 0.5;
-      for (let x = 0; x < W; x += 40) { ctx.beginPath(); ctx.moveTo(x, 0); ctx.lineTo(x, H); ctx.stroke(); }
-      for (let y = 0; y < H; y += 40) { ctx.beginPath(); ctx.moveTo(0, y); ctx.lineTo(W, y); ctx.stroke(); }
+      // Subtle radial bg glow
+      const bgG = ctx.createRadialGradient(ccx, ccy, 0, ccx, ccy, Math.max(W, H) * 0.7);
+      bgG.addColorStop(0, "rgba(10,30,80,0.8)");
+      bgG.addColorStop(1, "transparent");
+      ctx.fillStyle = bgG;
+      ctx.fillRect(0, 0, W, H);
 
-      // ── Particles ──
-      const speed = speaking ? 2.5 : listening ? 1.8 : 1;
-      particles.forEach(p => {
-        p.vx += (p.ax - p.x) * 0.003 + (Math.random() - 0.5) * 0.1;
-        p.vy += (p.ay - p.y) * 0.003 + (Math.random() - 0.5) * 0.1;
-        p.vx *= 0.95; p.vy *= 0.95;
-        p.x += p.vx * speed; p.y += p.vy * speed;
-        ctx.beginPath();
-        ctx.arc(p.x, p.y, p.size, 0, Math.PI * 2);
-        ctx.fillStyle = accent + Math.floor(p.opacity * (speaking ? 255 : listening ? 200 : 160)).toString(16).padStart(2, "0");
-        ctx.fill();
+      // Move nodes gently
+      nodes.forEach((n, i) => {
+        const layer = Math.floor(i / 4) + 1;
+        const targetX = ccx + Math.cos(n.angle + t * 0.05) * n.r;
+        const targetY = ccy + Math.sin(n.angle + t * 0.05) * n.r * 0.85;
+        n.phase += 0.012;
+        n.x += (targetX - n.x) * 0.01 + Math.sin(n.phase) * 0.3;
+        n.y += (targetY - n.y) * 0.01 + Math.cos(n.phase * 0.7) * 0.3;
       });
 
-      // ── Oval rings ──
-      const rx = Math.min(W, H) * 0.28, ry = Math.min(W, H) * 0.38;
-      [1, 1.15, 1.32, 1.5].forEach((scale, i) => {
-        ctx.beginPath();
-        ctx.ellipse(cx, cy, rx * scale, ry * scale, 0, 0, Math.PI * 2);
-        ctx.strokeStyle = accent + ["44", "28", "18", "10"][i];
-        ctx.lineWidth = i === 0 ? 1.5 : 0.8;
-        ctx.setLineDash(i > 1 ? [4, 6] : []);
-        ctx.stroke();
-        ctx.setLineDash([]);
+      // Draw connections
+      conns.forEach(([ai, bi]) => {
+        const na = ai === -1 ? { x: ccx, y: ccy, color: "#4fc3f7" } : nodes[ai];
+        const nb = nodes[bi];
+        if (!na || !nb) return;
+        const g = ctx.createLinearGradient(na.x, na.y, nb.x, nb.y);
+        g.addColorStop(0, (na as { color: string }).color + "55");
+        g.addColorStop(1, nb.color + "22");
+        ctx.beginPath(); ctx.moveTo(na.x, na.y); ctx.lineTo(nb.x, nb.y);
+        ctx.strokeStyle = g; ctx.lineWidth = active ? 1.2 : 0.8; ctx.stroke();
       });
 
-      // Tick marks on outer oval
+      // Draw particles
+      particles.forEach((p) => {
+        p.t += p.speed * (speaking ? 3 : listening ? 2 : 1);
+        if (p.t > 1) p.t -= 1;
+        const [ai, bi] = conns[p.conn];
+        const na = ai === -1 ? { x: ccx, y: ccy, color: "#4fc3f7" } : nodes[ai];
+        const nb = nodes[bi];
+        if (!na || !nb) return;
+        const px = na.x + (nb.x - na.x) * p.t;
+        const py = na.y + (nb.y - na.y) * p.t;
+        const pg = ctx.createRadialGradient(px, py, 0, px, py, 6);
+        pg.addColorStop(0, nb.color + "ff");
+        pg.addColorStop(1, "transparent");
+        ctx.fillStyle = pg;
+        ctx.beginPath(); ctx.arc(px, py, 6, 0, Math.PI * 2); ctx.fill();
+        ctx.fillStyle = "#ffffff";
+        ctx.beginPath(); ctx.arc(px, py, 1.5, 0, Math.PI * 2); ctx.fill();
+      });
+
+      // Draw nodes
+      nodes.forEach((n) => {
+        const pulse = Math.sin(n.phase * 2) * (speaking ? 5 : listening ? 3 : 1.5);
+        const r = n.size + pulse;
+
+        // Glow
+        const g = ctx.createRadialGradient(n.x, n.y, 0, n.x, n.y, r * 6);
+        g.addColorStop(0, n.color + "66");
+        g.addColorStop(1, "transparent");
+        ctx.fillStyle = g;
+        ctx.beginPath(); ctx.arc(n.x, n.y, r * 6, 0, Math.PI * 2); ctx.fill();
+
+        // Dot
+        ctx.fillStyle = n.color;
+        ctx.beginPath(); ctx.arc(n.x, n.y, r, 0, Math.PI * 2); ctx.fill();
+
+        // Label box
+        if (n.size >= 5) {
+          ctx.font = "bold 9px monospace";
+          const tw = ctx.measureText(n.label).width;
+          const lx = n.x + r + 6, ly = n.y - 7;
+          ctx.fillStyle = "rgba(1,6,20,0.85)";
+          ctx.strokeStyle = n.color + "55"; ctx.lineWidth = 0.8;
+          ctx.fillRect(lx - 3, ly - 2, tw + 6, 16);
+          ctx.strokeRect(lx - 3, ly - 2, tw + 6, 16);
+          ctx.fillStyle = n.color;
+          ctx.textAlign = "left"; ctx.textBaseline = "top";
+          ctx.fillText(n.label, lx, ly);
+        }
+      });
+
+      // Central brain orb
+      const orbR = 65 + (speaking ? Math.sin(t * 8) * 10 : listening ? Math.sin(t * 4) * 6 : Math.sin(t * 0.8) * 3);
+
+      // Multi-layer glow
+      [orbR * 4, orbR * 2.5, orbR * 1.4].forEach((gr, gi) => {
+        const gg = ctx.createRadialGradient(ccx, ccy, 0, ccx, ccy, gr);
+        const alphas = ["20", "35", "50"];
+        gg.addColorStop(0, (speaking ? "#00e5ff" : listening ? "#e040fb" : "#4488ff") + alphas[gi]);
+        gg.addColorStop(1, "transparent");
+        ctx.fillStyle = gg;
+        ctx.beginPath(); ctx.arc(ccx, ccy, gr, 0, Math.PI * 2); ctx.fill();
+      });
+
+      // Orb body
+      const og = ctx.createRadialGradient(ccx - 20, ccy - 20, 0, ccx, ccy, orbR);
+      if (speaking) { og.addColorStop(0, "#aaf0ff"); og.addColorStop(0.5, "#0088bb"); }
+      else if (listening) { og.addColorStop(0, "#ff88ff"); og.addColorStop(0.5, "#aa00ee"); }
+      else { og.addColorStop(0, "#88aaff"); og.addColorStop(0.5, "#2244cc"); }
+      og.addColorStop(1, "#080820");
+      ctx.beginPath(); ctx.arc(ccx, ccy, orbR, 0, Math.PI * 2);
+      ctx.fillStyle = og; ctx.fill();
+
+      // Rotating rings
+      [orbR + 12, orbR + 22, orbR + 36].forEach((rr, ri) => {
+        ctx.beginPath();
+        ctx.arc(ccx, ccy, rr, t * (ri % 2 === 0 ? 0.5 : -0.3), t * (ri % 2 === 0 ? 0.5 : -0.3) + Math.PI * 1.6);
+        ctx.strokeStyle = (speaking ? "#00e5ff" : listening ? "#e040fb" : "#4488ff") + ["66", "44", "22"][ri];
+        ctx.lineWidth = ri === 0 ? 1.5 : 0.8; ctx.stroke();
+      });
+
+      // Scan sweep
+      const sa = t * 1.5;
+      ctx.beginPath(); ctx.moveTo(ccx, ccy);
+      ctx.arc(ccx, ccy, Math.min(W, H) * 0.44, sa, sa + 0.6);
+      ctx.closePath();
+      ctx.fillStyle = (speaking ? "#00e5ff" : "#4488ff") + "0a"; ctx.fill();
+
+      // Outer tick ring
+      const outerR = Math.min(W, H) * 0.44;
       for (let i = 0; i < 72; i++) {
         const a = (i / 72) * Math.PI * 2;
-        const ox = Math.cos(a) * rx * 1.5, oy = Math.sin(a) * ry * 1.5;
-        const len = i % 9 === 0 ? 10 : i % 3 === 0 ? 6 : 3;
-        const nx = Math.cos(a), ny = Math.sin(a) * (ry / rx);
-        const nlen = Math.hypot(nx, ny);
+        const inn = i % 6 === 0 ? outerR - 12 : outerR - 5;
         ctx.beginPath();
-        ctx.moveTo(cx + ox, cy + oy);
-        ctx.lineTo(cx + ox + (nx / nlen) * len, cy + oy + (ny / nlen) * len);
-        ctx.strokeStyle = accent + (i % 9 === 0 ? "88" : "44");
-        ctx.lineWidth = i % 9 === 0 ? 1.5 : 0.7;
-        ctx.stroke();
+        ctx.moveTo(ccx + Math.cos(a) * inn, ccy + Math.sin(a) * inn);
+        ctx.lineTo(ccx + Math.cos(a) * outerR, ccy + Math.sin(a) * outerR);
+        ctx.strokeStyle = "#4488ff" + (i % 6 === 0 ? "66" : "22");
+        ctx.lineWidth = i % 6 === 0 ? 1.5 : 0.5; ctx.stroke();
       }
 
-      // Central glow
-      const cg = ctx.createRadialGradient(cx, cy, 0, cx, cy, rx * 0.5);
-      cg.addColorStop(0, accent + "cc");
-      cg.addColorStop(0.3, accent + "44");
-      cg.addColorStop(1, "transparent");
-      ctx.fillStyle = cg;
-      ctx.beginPath(); ctx.ellipse(cx, cy, rx * 0.5, ry * 0.5, 0, 0, Math.PI * 2); ctx.fill();
+      // "+" in center
+      ctx.fillStyle = "rgba(255,255,255,0.9)";
+      ctx.font = "bold 20px sans-serif"; ctx.textAlign = "center"; ctx.textBaseline = "middle";
+      ctx.fillText("+", ccx, ccy);
 
-      // ── TOP LEFT: System info ──
-      const tlx = 16, tly = 16;
-      ctx.font = "10px monospace"; ctx.textAlign = "left"; ctx.textBaseline = "top";
-      ctx.fillStyle = accentDim;
-      ctx.fillText("S.A.R.A.S — DEEP AI NEURAL INTELLIGENCE SYSTEM", tlx, tly);
-      ctx.fillStyle = accent + "44"; ctx.fillRect(tlx, tly + 14, 300, 0.5);
+      // ── HUD OVERLAYS ──
 
-      // Mini buttons
-      ["NEURAL", "VOICE", "SYNC", "INTEL"].forEach((label, i) => {
-        const bx = tlx + i * 58, by = tly + 18;
-        ctx.fillStyle = i === 0 ? accent + "33" : "rgba(0,0,20,0.6)";
-        ctx.strokeStyle = accentDim; ctx.lineWidth = 0.7;
-        ctx.fillRect(bx, by, 50, 14); ctx.strokeRect(bx, by, 50, 14);
-        ctx.fillStyle = i === 0 ? accent : accent + "88";
-        ctx.font = "7px monospace"; ctx.textAlign = "center"; ctx.textBaseline = "middle";
-        ctx.fillText(label, bx + 25, by + 7);
+      // Top left: connected status
+      ctx.font = "11px monospace"; ctx.textAlign = "left"; ctx.textBaseline = "top";
+      ctx.fillStyle = "rgba(100,200,255,0.5)";
+      ctx.fillText("● CONNECTED", 12, 12);
+
+      // Top right: LISTENING indicator
+      ctx.textAlign = "right";
+      ctx.fillStyle = listening ? "#88ff88" : speaking ? "#88ddff" : "rgba(100,200,255,0.4)";
+      ctx.font = "bold 12px monospace";
+      ctx.fillText(listening ? "● LISTENING" : speaking ? "● SPEAKING" : "LI", W - 12, 12);
+
+      // Right side label list (like reference image)
+      ctx.font = "9px monospace"; ctx.textAlign = "right";
+      RIGHT_LABELS.forEach((label, i) => {
+        const isActive = nodes.some(n => n.label === label);
+        const lx = W - 12, ly = H * 0.2 + i * 22;
+        ctx.fillStyle = isActive ? "rgba(150,220,255,0.8)" : "rgba(100,180,255,0.3)";
+        ctx.fillRect(lx - ctx.measureText(label).width - 16, ly, ctx.measureText(label).width + 12, 16);
+        ctx.strokeStyle = "rgba(100,200,255,0.2)"; ctx.lineWidth = 0.5;
+        ctx.strokeRect(lx - ctx.measureText(label).width - 16, ly, ctx.measureText(label).width + 12, 16);
+        ctx.fillStyle = isActive ? "#ffffff" : "rgba(150,220,255,0.5)";
+        ctx.fillText(label, lx - 4, ly + 3);
       });
 
-      ctx.font = "9px monospace"; ctx.textAlign = "left"; ctx.textBaseline = "top";
+      // Left: business stats panels
+      const lsy = H * 0.25;
+      ctx.textAlign = "left";
 
-      // System stats left panel
-      const lx = 16, ly = tly + 50;
-      ctx.fillStyle = "rgba(2,2,20,0.75)";
-      roundRect(ctx, lx, ly, 160, 180, 6); ctx.fill();
-      ctx.strokeStyle = accent + "33"; ctx.lineWidth = 0.8; roundRect(ctx, lx, ly, 160, 180, 6); ctx.stroke();
-
-      ctx.fillStyle = accent;
-      ctx.fillText("SYSTEM STATUS", lx + 8, ly + 8);
-      ctx.fillStyle = accent + "44"; ctx.fillRect(lx + 8, ly + 20, 144, 0.5);
-
-      const sysStats = [
-        ["FOLLOWERS", stats.followers.toLocaleString()],
-        ["ACCOUNTS", String(stats.accounts.length)],
-        ["TASKS", stats.tasks + " PENDING"],
-        ["REVENUE", "$" + stats.revenue.toLocaleString()],
-        ["AI MODEL", "CLAUDE"],
-        ["VOICE", "LILY"],
-        ["STATUS", "ONLINE"],
-      ];
-      sysStats.forEach(([k, v], i) => {
-        ctx.fillStyle = accent + "88"; ctx.fillText(k, lx + 8, ly + 28 + i * 21);
-        ctx.fillStyle = k === "STATUS" ? "#69ff47" : k === "REVENUE" ? "#69ff47" : "#e0e0f0";
-        ctx.textAlign = "right"; ctx.fillText(v, lx + 152, ly + 28 + i * 21);
-        ctx.textAlign = "left";
-      });
-
-      // ── TOP RIGHT: Clock + coords ──
-      const now2 = new Date();
-      const timeStr = now2.toTimeString().slice(0, 8);
-      const dateStr = now2.toDateString().toUpperCase();
-      const trx = W - 16, try2 = 16;
-      ctx.textAlign = "right"; ctx.textBaseline = "top";
-      ctx.font = "bold 22px monospace"; ctx.fillStyle = accent;
-      ctx.fillText(timeStr, trx, try2);
-      ctx.font = "9px monospace"; ctx.fillStyle = accentDim;
-      ctx.fillText(dateStr, trx, try2 + 26);
-      ctx.fillText("LAT 48.8566 // LONG 2.3522", trx, try2 + 40);
-      ctx.fillText("ALT 35M // BEARING 045", trx, try2 + 54);
-
-      // Radar
-      const radCx = W - 85, radCy = try2 + 120, radR = 60;
-      ctx.fillStyle = "rgba(2,2,20,0.8)"; ctx.strokeStyle = accent + "44"; ctx.lineWidth = 1;
-      ctx.beginPath(); ctx.arc(radCx, radCy, radR, 0, Math.PI * 2); ctx.fill(); ctx.stroke();
-      [0.33, 0.66, 1].forEach(s => {
-        ctx.beginPath(); ctx.arc(radCx, radCy, radR * s, 0, Math.PI * 2);
-        ctx.strokeStyle = accent + "33"; ctx.lineWidth = 0.5; ctx.stroke();
-      });
-      // Cross hairs
-      ctx.strokeStyle = accent + "44"; ctx.lineWidth = 0.5;
-      ctx.beginPath(); ctx.moveTo(radCx - radR, radCy); ctx.lineTo(radCx + radR, radCy); ctx.stroke();
-      ctx.beginPath(); ctx.moveTo(radCx, radCy - radR); ctx.lineTo(radCx, radCy + radR); ctx.stroke();
-      // Sweep
-      radarAngle += 0.04;
-      const sweepGrad = ctx.createConicalGradient ? null : null;
-      ctx.beginPath(); ctx.moveTo(radCx, radCy);
-      ctx.arc(radCx, radCy, radR, radarAngle - 0.8, radarAngle);
-      ctx.closePath(); ctx.fillStyle = accent + "22"; ctx.fill();
-      ctx.beginPath(); ctx.moveTo(radCx, radCy);
-      ctx.lineTo(radCx + Math.cos(radarAngle) * radR, radCy + Math.sin(radarAngle) * radR);
-      ctx.strokeStyle = accent; ctx.lineWidth = 1.5; ctx.stroke();
-      // Blips
-      radarBlips.forEach(b => {
-        b.life -= 0.01;
-        if (b.life <= 0) { b.angle = Math.random() * Math.PI * 2; b.r = Math.random() * 0.8 + 0.1; b.life = 0.8 + Math.random() * 0.5; }
-        const bx2 = radCx + Math.cos(b.angle) * radR * b.r;
-        const by2 = radCy + Math.sin(b.angle) * radR * b.r;
-        ctx.beginPath(); ctx.arc(bx2, by2, 2.5, 0, Math.PI * 2);
-        ctx.fillStyle = accent + Math.floor(b.life * 255).toString(16).padStart(2, "0");
-        ctx.fill();
-      });
-      ctx.font = "8px monospace"; ctx.fillStyle = accent + "66"; ctx.textAlign = "center";
-      ctx.fillText("PROXIMITY", radCx, try2 + 72);
-
-      // Waveform
-      const wvx = W - 175, wvy = try2 + 195, wvW = 160, wvH = 30;
-      ctx.fillStyle = "rgba(2,2,20,0.7)"; roundRect(ctx, wvx - 5, wvy - 5, wvW + 10, wvH + 15, 4); ctx.fill();
-      ctx.strokeStyle = accent + "33"; ctx.lineWidth = 0.5; roundRect(ctx, wvx - 5, wvy - 5, wvW + 10, wvH + 15, 4); ctx.stroke();
-      if (speaking || listening) waveData.forEach((_, i) => { waveData[i] = 0.2 + Math.random() * 0.8; });
-      ctx.beginPath();
-      waveData.forEach((v, i) => {
-        const wx = wvx + (i / waveData.length) * wvW;
-        const wy = wvy + wvH / 2 - v * wvH / 2 * (speaking ? 1 : listening ? 0.7 : 0.3);
-        i === 0 ? ctx.moveTo(wx, wy) : ctx.lineTo(wx, wy);
-      });
-      ctx.strokeStyle = accent; ctx.lineWidth = 1; ctx.stroke();
-      ctx.font = "7px monospace"; ctx.fillStyle = accent + "66"; ctx.textAlign = "left";
-      ctx.fillText("AUDIO I/O", wvx, wvy + wvH + 5);
-      ctx.textAlign = "right"; ctx.fillText(speaking ? "TX" : listening ? "RX" : "--", wvx + wvW, wvy + wvH + 5);
-
-      // Right stats
-      const rstats = ["SOLARLINK: 1.33v/s", "UPTIME: " + Math.floor(time / 60) + "m " + Math.floor(time % 60) + "s", "SYNC: ACTIVE", "BUFFER: 0.2ms", "NEURAL: LIVE"];
-      ctx.font = "8px monospace"; ctx.textAlign = "right"; ctx.textBaseline = "top";
-      rstats.forEach((s, i) => {
-        ctx.fillStyle = i === 3 ? "#ff4747" : accentDim;
-        ctx.fillText(s, W - 16, try2 + 245 + i * 16);
-      });
-
-      // ── BOTTOM CENTER: Financial stats ──
-      const bcY = H - 90;
-      ctx.fillStyle = "rgba(2,2,20,0.8)";
-      roundRect(ctx, W / 2 - 200, bcY, 400, 70, 6); ctx.fill();
-      ctx.strokeStyle = accent + "44"; ctx.lineWidth = 0.8;
-      roundRect(ctx, W / 2 - 200, bcY, 400, 70, 6); ctx.stroke();
-
-      ctx.font = "9px monospace"; ctx.fillStyle = accentDim; ctx.textAlign = "center"; ctx.textBaseline = "top";
-      ctx.fillText("REVENUE OBJECTIVE", W / 2, bcY + 6);
-      ctx.fillStyle = accent + "44"; ctx.fillRect(W / 2 - 180, bcY + 18, 360, 0.5);
-
-      const income = stats.revenue > 0 ? stats.revenue : 0;
-      const cols = [
-        { label: "TOTAL INCOME", val: "$" + income.toLocaleString(), color: "#69ff47" },
-        { label: "THIS MONTH", val: "$" + Math.round(income * 0.48).toLocaleString(), color: accent },
-        { label: "NET PROFIT", val: "$" + Math.round(income * 0.32).toLocaleString(), color: "#69ff47" },
-      ];
-      cols.forEach((c, i) => {
-        const x2 = W / 2 - 120 + i * 120;
-        ctx.fillStyle = c.color; ctx.font = "bold 14px monospace"; ctx.textAlign = "center";
-        ctx.fillText(c.val, x2, bcY + 26);
-        ctx.fillStyle = accentDim; ctx.font = "7px monospace";
-        ctx.fillText(c.label, x2, bcY + 46);
-      });
-
-      // Bottom left: TikTok accounts
-      const blx = 16, bly = H - 120;
-      ctx.fillStyle = "rgba(2,2,20,0.8)"; roundRect(ctx, blx, bly, 180, 100, 6); ctx.fill();
-      ctx.strokeStyle = accent + "33"; ctx.lineWidth = 0.8; roundRect(ctx, blx, bly, 180, 100, 6); ctx.stroke();
-      ctx.font = "9px monospace"; ctx.fillStyle = accent; ctx.textAlign = "left"; ctx.textBaseline = "top";
-      ctx.fillText("TIKTOK ACCOUNTS", blx + 8, bly + 8);
-      ctx.fillStyle = accent + "44"; ctx.fillRect(blx + 8, bly + 20, 164, 0.5);
-      if (stats.accounts.length === 0) { ctx.fillStyle = accent + "66"; ctx.fillText("No accounts linked", blx + 8, bly + 28); }
+      // Accounts (white)
+      ctx.font = "bold 9px monospace"; ctx.fillStyle = "rgba(100,200,255,0.6)";
+      ctx.fillText("ACCOUNTS", 12, lsy);
       stats.accounts.slice(0, 3).forEach((a, i) => {
-        ctx.fillStyle = "#e0e0f0"; ctx.fillText("@" + a, blx + 8, bly + 28 + i * 18);
-        ctx.fillStyle = accentDim; ctx.textAlign = "right";
-        ctx.fillText(stats.followers.toLocaleString() + " F", blx + 172, bly + 28 + i * 18);
-        ctx.textAlign = "left";
+        ctx.font = "9px monospace"; ctx.fillStyle = "#ffffff";
+        ctx.fillText("@" + a + "  " + stats.followers.toLocaleString() + "F", 12, lsy + 16 + i * 18);
       });
+      if (stats.accounts.length === 0) { ctx.fillStyle = "#aaaaaa"; ctx.fillText("No accounts", 12, lsy + 16); }
 
-      // Bottom right: misc stats
-      const brx = W - 196, bry = H - 120;
-      const brstats = [
-        "SPL/DB: -1.33v/s",
-        "NEURAL: 0.28A",
-        "PACKET LOSS: 0%",
-        "PING: 42MS",
-      ];
-      ctx.fillStyle = "rgba(2,2,20,0.8)"; roundRect(ctx, brx, bry, 180, 100, 6); ctx.fill();
-      ctx.strokeStyle = accent + "33"; ctx.lineWidth = 0.8; roundRect(ctx, brx, bry, 180, 100, 6); ctx.stroke();
-      ctx.font = "9px monospace"; ctx.fillStyle = accent; ctx.textAlign = "left"; ctx.textBaseline = "top";
-      ctx.fillText("DIAGNOSTICS", brx + 8, bry + 8);
-      ctx.fillStyle = accent + "44"; ctx.fillRect(brx + 8, bry + 20, 164, 0.5);
-      brstats.forEach((s2, i) => {
-        ctx.fillStyle = accentDim; ctx.fillText(s2, brx + 8, bry + 28 + i * 18);
-      });
+      // Tasks (red)
+      const tsy = lsy + 80;
+      ctx.font = "bold 9px monospace"; ctx.fillStyle = "rgba(100,200,255,0.6)";
+      ctx.fillText("PENDING TASKS", 12, tsy);
+      ctx.font = "bold 18px monospace"; ctx.fillStyle = "#ff4444";
+      ctx.fillText(String(stats.tasks), 12, tsy + 14);
+      ctx.font = "9px monospace"; ctx.fillStyle = "#ff666688";
+      ctx.fillText("TASKS DUE", 12, tsy + 34);
 
-      // Status bar bottom
-      ctx.font = "10px monospace"; ctx.textAlign = "right"; ctx.textBaseline = "bottom";
-      ctx.fillStyle = speaking ? "#00e5ff" : listening ? "#e040fb" : accent + "55";
-      ctx.fillText(speaking ? "// TRANSMITTING" : listening ? "// RECEIVING VOICE INPUT" : "// STANDBY — SAY \"FAY\" TO ACTIVATE", W - 200, H - 8);
+      // Revenue (green)
+      const rsy = tsy + 60;
+      ctx.font = "bold 9px monospace"; ctx.fillStyle = "rgba(100,200,255,0.6)";
+      ctx.fillText("REVENUE", 12, rsy);
+      ctx.font = "bold 18px monospace"; ctx.fillStyle = "#44ff88";
+      ctx.fillText("$" + stats.revenue.toLocaleString(), 12, rsy + 14);
+      ctx.font = "9px monospace"; ctx.fillStyle = "#66ff8888";
+      ctx.fillText("NET BALANCE", 12, rsy + 34);
 
+      // Bottom: transcript + status
       if (tr) {
-        ctx.font = "13px monospace"; ctx.textAlign = "center"; ctx.fillStyle = "rgba(255,255,255,0.8)";
-        ctx.fillText(`"${tr}"`, W / 2, H - 100);
+        ctx.font = "14px monospace"; ctx.textAlign = "center"; ctx.textBaseline = "bottom";
+        ctx.fillStyle = "rgba(255,255,255,0.9)";
+        ctx.fillText(tr, W / 2, H - 20);
       }
 
-      time += 0.016;
+      // Bottom left: HEY FAY indicator
+      ctx.font = "10px monospace"; ctx.textAlign = "left"; ctx.textBaseline = "bottom";
+      ctx.fillStyle = "rgba(100,200,255,0.4)";
+      ctx.fillText('"HEY FAY"', 12, H - 8);
+
+      t += 0.016;
     }
 
     animRef.current = requestAnimationFrame(draw);
@@ -319,12 +324,4 @@ export default function NeuralNetwork({ listening, speaking, transcript, stats }
   }, []);
 
   return <canvas ref={canvasRef} className="fixed inset-0 w-full h-full" style={{ zIndex: 0 }} />;
-}
-
-function roundRect(ctx: CanvasRenderingContext2D, x: number, y: number, w: number, h: number, r: number) {
-  ctx.beginPath();
-  ctx.moveTo(x + r, y); ctx.lineTo(x + w - r, y); ctx.arcTo(x + w, y, x + w, y + r, r);
-  ctx.lineTo(x + w, y + h - r); ctx.arcTo(x + w, y + h, x + w - r, y + h, r);
-  ctx.lineTo(x + r, y + h); ctx.arcTo(x, y + h, x, y + h - r, r);
-  ctx.lineTo(x, y + r); ctx.arcTo(x, y, x + r, y, r); ctx.closePath();
 }

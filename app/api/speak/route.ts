@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 
-// Alyx — British male
-const VOICE_ID = "1BUhH8aaMvGMUdGAmWVM";
+// Lily — Velvety British female
+const VOICE_ID = "pFZP5JQG7iQjIQuC4Bku";
 
 export async function POST(req: NextRequest) {
   try {
@@ -38,8 +38,9 @@ export async function POST(req: NextRequest) {
 
     if (!res.ok) {
       const err = await res.text();
-      console.error("[speak] ElevenLabs error:", err);
-      return NextResponse.json({ error: err }, { status: 500 });
+      console.error("[speak] ElevenLabs error:", res.status, err);
+      // Fall back — return error so client uses browser TTS
+      return NextResponse.json({ error: err }, { status: res.status });
     }
 
     const audioBuffer = await res.arrayBuffer();

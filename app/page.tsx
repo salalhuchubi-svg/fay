@@ -27,19 +27,33 @@ export default function HomePage() {
   const speak = useCallback((text: string) => {
     if (!window.speechSynthesis) return;
     window.speechSynthesis.cancel();
-    const utter = new SpeechSynthesisUtterance(text);
-    utter.rate = 1.05;
-    utter.pitch = 1.1;
+
+    // Clean text — remove any markdown or special chars before speaking
+    const cleanText = text
+      .replace(/[#*_~`]/g, "")
+      .replace(/\n+/g, ". ")
+      .trim();
+
+    const utter = new SpeechSynthesisUtterance(cleanText);
+    utter.rate = 0.95;
+    utter.pitch = 1.0;
     utter.volume = 1;
+
     const voices = window.speechSynthesis.getVoices();
-    const preferred = voices.find(
-      (v) =>
-        v.name.includes("Samantha") ||
-        v.name.includes("Karen") ||
-        v.name.includes("Ava") ||
-        v.name.includes("Google UK English Female") ||
-        (v.lang === "en-US" && v.name.toLowerCase().includes("female"))
-    );
+
+    // Priority order — most natural sounding voices
+    const preferred =
+      voices.find(v => v.name === "Google UK English Female") ||
+      voices.find(v => v.name === "Samantha") ||
+      voices.find(v => v.name === "Karen") ||
+      voices.find(v => v.name === "Ava") ||
+      voices.find(v => v.name === "Victoria") ||
+      voices.find(v => v.name === "Allison") ||
+      voices.find(v => v.name.includes("Google") && v.lang.startsWith("en")) ||
+      voices.find(v => v.lang === "en-GB" && !v.name.includes("Male")) ||
+      voices.find(v => v.lang === "en-US" && !v.name.includes("Male")) ||
+      voices.find(v => v.lang.startsWith("en"));
+
     if (preferred) utter.voice = preferred;
     synthRef.current = utter;
     setSpeaking(true);
